@@ -4,6 +4,8 @@ import World from './World.jsx'
 import Player from './Player.jsx'
 import Minimap from './Minimap.jsx'
 import TouchControls from './TouchControls.jsx'
+import ChatWindow from './ChatWindow.jsx'
+import { talk } from './talk.js'
 import { EYE, SPAWN } from './layout.js'
 
 export default function App() {
@@ -24,8 +26,30 @@ export default function App() {
     setTouchOn(on)
   }
   const playing = locked || touchOn
+
+  // chatting with a professor: the mouse is released and the walker stops until the chat closes
+  const [chat, setChat] = useState(null) // { id, name, course } of the professor you're talking to
+  const [near, setNear] = useState(null)
+  const chatFromTouch = useRef(false)
+  const onNear = useCallback((id) => setNear(id), [])
+  const openChat = useCallback((id) => {
+    const t = talk.targets[id]
+    if (!t) return
+    talk.active = id
+    talk.mood = 'listening'
+    chatFromTouch.current = touchRef.current.active
+    if (touchRef.current.active) setTouch(false)
+    setChat({ id, name: t.name, course: t.course })
+  }, [])
+  const closeChat = useCallback((keepWalking) => {
+    talk.active = null
+    setChat(null)
+    if (chatFromTouch.current) setTouch(true)
+    else if (keepWalking) lockRef.current?.() // the close click counts as the gesture pointer lock needs
+  }, [])
+
   useEffect(() => {
-    const k = (e) => e.code === 'KeyM' && setShowMap((v) => !v)
+    const k = (e) => e.code === 'KeyM' && !e.target.matches?.('input, textarea') && setShowMap((v) => !v)
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
   }, [])
@@ -37,7 +61,7 @@ export default function App() {
         dpr={[1, 1.75]}
       >
         <World />
-        <Player lockRef={lockRef} mapRef={mapRef} touchRef={touchRef} onLock={onLock} onWhere={onWhere} />
+        <Player lockRef={lockRef} mapRef={mapRef} touchRef={touchRef} onLock={onLock} onWhere={onWhere} onTalk={openChat} onNear={onNear} />
       </Canvas>
 
       <div className="where">
@@ -52,8 +76,18 @@ export default function App() {
       </button>
       {playing && <div className="crosshair" />}
       {touchOn && <TouchControls touchRef={touchRef} onPause={() => setTouch(false)} />}
+      {playing && near && !chat && talk.targets[near] && (
+        touchOn ? (
+          <button className="talkbtn" onClick={() => openChat(near)}>
+            Talk to {talk.targets[near].name}
+          </button>
+        ) : (
+          <div className="talkhint">Aim at {talk.targets[near].name} and click to chat</div>
+        )
+      )}
+      {chat && <ChatWindow key={chat.id} prof={chat} onClose={closeChat} />}
 
-      {!playing && (
+      {!playing && !chat && (
         <div className="overlay" onClick={() => (isTouch ? setTouch(true) : lockRef.current?.())}>
           <div className="card">
             <div className="kicker">Yale SOM · Evans Hall</div>

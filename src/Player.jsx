@@ -3,16 +3,20 @@ import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js'
 import { EYE, MAX_STEP, SPAWN, collide, floorAt, locate } from './layout.js'
+import { TALK_RANGE, talk } from './talk.js'
 
 const CROUCH_EYE = 1.05
 const JUMP_SPEED = 4.2
 const GRAVITY = 12
 const LOOK_SPEED = 0.005 // radians per touch pixel
+const typing = (e) => e.target instanceof HTMLElement && e.target.matches('input, textarea')
 
 // PC controls work like a shooter: WASD move, mouse look, Shift sprint, Space jump, C crouch.
 // Touch controls come in through touchRef: { active, move: [x, y], look: [dx, dy], jump }.
-export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere }) {
-  const { camera, gl } = useThree()
+// Clicking a professor under the crosshair (talk.targets) releases the mouse and calls onTalk(id);
+// onNear(id | null) reports the professor in range so phones can show a talk button.
+export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere, onTalk, onNear }) {
+  const { camera, gl, scene } = useThree()
   const controls = useMemo(() => new PointerLockControls(camera, gl.domElement), [camera, gl])
   const keys = useRef({})
   const where = useRef('')
@@ -23,6 +27,8 @@ export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere }) {
   const vy = useRef(0)
   const fwd = useMemo(() => new THREE.Vector3(), [])
   const euler = useMemo(() => new THREE.Euler(0, 0, 0, 'YXZ'), [])
+  const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, TALK_RANGE), [])
+  const near = useRef(null)
 
   useEffect(() => {
     camera.position.set(SPAWN.x, EYE, SPAWN.z)
@@ -36,11 +42,28 @@ export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere }) {
     controls.addEventListener('lock', on)
     controls.addEventListener('unlock', off)
     const down = (e) => {
+      if (typing(e)) return // the chat box gets the keys, not the walker
       keys.current[e.code] = true
       if (e.code === 'Space') e.preventDefault()
     }
     const up = (e) => (keys.current[e.code] = false)
     const blur = () => (keys.current = {})
+    // click a professor under the crosshair to talk
+    const click = () => {
+      if (!controls.isLocked) return
+      ray.setFromCamera(new THREE.Vector2(0, 0), camera)
+      // the first thing under the crosshair has to be part of a professor (no talking through walls)
+      for (let o = ray.intersectObject(scene, true)[0]?.object; o; o = o.parent) {
+        const id = Object.keys(talk.targets).find((k) => talk.targets[k].object === o)
+        if (id) {
+          keys.current = {}
+          controls.unlock()
+          onTalk(id)
+          return
+        }
+      }
+    }
+    document.addEventListener('mousedown', click)
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     window.addEventListener('blur', blur)
@@ -48,11 +71,12 @@ export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere }) {
       controls.removeEventListener('lock', on)
       controls.removeEventListener('unlock', off)
       controls.dispose()
+      document.removeEventListener('mousedown', click)
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', blur)
     }
-  }, [camera, controls, lockRef, onLock])
+  }, [camera, controls, lockRef, onLock, onTalk, ray, scene])
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05)
@@ -135,6 +159,15 @@ export default function Player({ lockRef, mapRef, touchRef, onLock, onWhere }) {
 
     if (import.meta.env.DEV) document.body.dataset.pos = `${camera.position.x.toFixed(2)},${camera.position.z.toFixed(2)},${fwd.x.toFixed(2)},${fwd.z.toFixed(2)}|${touch.move.map((v) => v.toFixed(2))}`
     mapRef.current?.(camera.position.x, camera.position.z, fwd.x, fwd.z)
+    let n = null
+    for (const [id, t] of Object.entries(talk.targets)) {
+      const p = t.object?.position
+      if (p && Math.hypot(p.x - camera.position.x, p.z - camera.position.z) < TALK_RANGE) n = id
+    }
+    if (n !== near.current) {
+      near.current = n
+      onNear(n)
+    }
     const w = locate(camera.position.x, camera.position.z)
     if (w !== where.current) {
       where.current = w
